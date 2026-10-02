@@ -41,6 +41,7 @@ from browser_use.agent.message_manager.service import (
 )
 from browser_use.agent.prompts import SystemPrompt
 from browser_use.agent.views import (
+	ActionEvent,
 	ActionResult,
 	AgentError,
 	AgentHistory,
@@ -118,6 +119,7 @@ Context = TypeVar('Context')
 
 
 AgentHookFunc = Callable[['Agent'], Awaitable[None]]
+ActionCallback = Callable[[ActionEvent], Awaitable[None]]
 
 
 class Agent(Generic[Context, AgentStructuredOutput]):
@@ -148,6 +150,8 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 		) = None,
 		register_external_agent_status_raise_error_callback: Callable[[], Awaitable[bool]] | None = None,
 		register_should_stop_callback: Callable[[], Awaitable[bool]] | None = None,
+		register_action_start_callback: ActionCallback | None = None,
+		register_action_end_callback: ActionCallback | None = None,
 		# Agent settings
 		output_model_schema: type[AgentStructuredOutput] | None = None,
 		use_vision: bool | Literal['auto'] = 'auto',
@@ -427,6 +431,8 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 		self.register_done_callback = register_done_callback
 		self.register_should_stop_callback = register_should_stop_callback
 		self.register_external_agent_status_raise_error_callback = register_external_agent_status_raise_error_callback
+		self.register_action_start_callback = register_action_start_callback
+		self.register_action_end_callback = register_action_end_callback
 
 		# Telemetry
 		self.telemetry = ProductTelemetry()
@@ -1910,6 +1916,19 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 				# Log action before execution
 				self._log_action(action, action_name, i + 1, total_actions)
 
+				action_event = None
+				if self.register_action_start_callback or self.register_action_end_callback:
+					index = action.get_index()
+					focus = self.browser_session.agent_focus
+					action_event = ActionEvent(
+						step=self.state.n_steps,
+						action_index=i,
+						action=action,
+						element=cached_selector_map.get(index) if index is not None else None,
+						target_id=focus.target_id if focus else None,
+					)
+					await self._fire_action_callback(self.register_action_start_callback, action_event)
+
 				time_start = time.time()
 
 				result = await self.tools.act(
@@ -1924,6 +1943,10 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 				time_end = time.time()
 				time_elapsed = time_end - time_start
 
+				if action_event is not None:
+					action_event.result = result
+					await self._fire_action_callback(self.register_action_end_callback, action_event)
+
 				results.append(result)
 
 				if results[-1].is_done or results[-1].error or i == total_actions - 1:
@@ -1935,6 +1958,15 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 				raise e
 
 		return results
+
+	async def _fire_action_callback(self, callback: ActionCallback | None, event: ActionEvent) -> None:
+		"""Run a per-action callback; a failing callback must never break the agent."""
+		if callback is None:
+			return
+		try:
+			await callback(event)
+		except Exception as e:
+			self.logger.warning(f'Action callback failed: {type(e).__name__}: {e}')
 
 	def _log_action(self, action, action_name: str, action_num: int, total_actions: int) -> None:
 		"""Log the action before execution with colored formatting"""
