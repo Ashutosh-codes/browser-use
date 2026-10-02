@@ -14,7 +14,7 @@ from uuid_extensions import uuid7str
 
 from browser_use.agent.message_manager.views import MessageManagerState
 from browser_use.browser.views import BrowserStateHistory
-from browser_use.dom.views import DEFAULT_INCLUDE_ATTRIBUTES, DOMInteractedElement, DOMSelectorMap
+from browser_use.dom.views import DEFAULT_INCLUDE_ATTRIBUTES, DOMInteractedElement, DOMSelectorMap, EnhancedDOMTreeNode
 
 # from browser_use.dom.history_tree_processor.service import (
 # 	DOMElementNode,
@@ -139,6 +139,23 @@ class ActionResult(BaseModel):
 				'Use success=False only for actions that fail.'
 			)
 		return self
+
+
+@dataclass
+class ActionEvent:
+	"""One action from ``multi_act``, passed to the per-action callbacks.
+
+	The start callback fires before the action runs, while ``element`` (the DOM node
+	behind the action's index, if any) is still on the live page in tab ``target_id``.
+	The end callback receives the same object with ``result`` set.
+	"""
+
+	step: int
+	action_index: int
+	action: ActionModel
+	element: EnhancedDOMTreeNode | None
+	target_id: str | None
+	result: ActionResult | None = None
 
 
 class StepMetadata(BaseModel):
